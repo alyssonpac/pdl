@@ -1,0 +1,1416 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Papo de Liso</title>
+<meta name="description" content="Revisões, provas e volume de questões." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<style>
+  html, body { margin: 0; padding: 0; background: #fafafa; }
+  * { box-sizing: border-box; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useRef } = React;
+
+
+/* ─── motor de intervalos (DePara da planilha original) ─── */
+const TABELA = {
+  primeira: [
+    { min: 0.81, dias: 23 },
+    { min: 0.71, dias: 20 },
+    { min: 0.66, dias: 13 },
+    { min: 0.6, dias: 10 },
+    { min: 0, dias: 3 },
+  ],
+  demais: [
+    { min: 0.81, dias: 30 },
+    { min: 0.71, dias: 25 },
+    { min: 0.66, dias: 18 },
+    { min: 0.6, dias: 13 },
+    { min: 0, dias: 7 },
+  ],
+};
+const intervalo = (pct, ehPrimeira) =>
+  (ehPrimeira ? TABELA.primeira : TABELA.demais).find((f) => pct >= f.min).dias;
+
+const AREAS = [
+  "Clínica Médica",
+  "Cirurgia",
+  "Pediatria",
+  "Ginecologia e Obstetrícia",
+  "Medicina Preventiva",
+];
+
+/* cor própria por grande área (tom forte para texto/borda, tom claro para fundo) */
+const AREA_CORES = {
+  "Clínica Médica": { cor: "#7c3aed", tinta: "#f3e8ff" },
+  "Cirurgia": { cor: "#ea580c", tinta: "#ffedd5" },
+  "Pediatria": { cor: "#0891b2", tinta: "#cffafe" },
+  "Ginecologia e Obstetrícia": { cor: "#db2777", tinta: "#fce7f3" },
+  "Medicina Preventiva": { cor: "#65a30d", tinta: "#ecfccb" },
+};
+const corDaArea = (area) =>
+  AREA_CORES[area] || { cor: "#52525b", tinta: "#f4f4f5" };
+
+const ORDINAIS = [
+  "Contato inicial",
+  "1ª revisão",
+  "2ª revisão",
+  "3ª revisão",
+  "4ª revisão",
+  "5ª revisão",
+  "6ª revisão",
+  "7ª revisão",
+  "8ª revisão",
+];
+
+const DOW_CURTO = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"];
+
+/* ─── datas ─── */
+const hoje = () => {
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+};
+const parseData = (s) => {
+  const [a, m, d] = s.split("-").map(Number);
+  return new Date(a, m - 1, d);
+};
+const iso = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
+const somaDias = (d, n) => {
+  const r = new Date(d);
+  r.setDate(r.getDate() + n);
+  return r;
+};
+const difDias = (a, b) => Math.round((a - b) / 86400000);
+const curto = (d) =>
+  `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(
+    2,
+    "0"
+  )}`;
+const inicioSemana = (d) => {
+  const r = new Date(d);
+  const dow = (r.getDay() + 6) % 7; // segunda = 0
+  r.setDate(r.getDate() - dow);
+  return r;
+};
+const MESES = [
+  "jan", "fev", "mar", "abr", "mai", "jun",
+  "jul", "ago", "set", "out", "nov", "dez",
+];
+const MESES_LONGO = [
+  "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+  "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+];
+
+/* ─── estado derivado ─── */
+function situacao(topico) {
+  const s = topico.sessoes;
+  const ultima = s[s.length - 1];
+  if (s.length >= 9) return { fase: "concluido" };
+  const pct = ultima.questoes > 0 ? ultima.acertos / ultima.questoes : 0;
+  const dias = intervalo(pct, s.length === 1);
+  const vencimentoCalculado = somaDias(parseData(ultima.data), dias);
+  const ajustado = !!topico.vencimentoManual;
+  const vencimento = ajustado ? parseData(topico.vencimentoManual) : vencimentoCalculado;
+  return {
+    fase: "ativo",
+    vencimento,
+    vencimentoCalculado,
+    ajustado,
+    restam: difDias(vencimento, hoje()),
+    proxima: ORDINAIS[s.length],
+    intervalo: dias,
+  };
+}
+
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap');
+.pdl{--ink:#fafafa;--panel:#ffffff;--panel2:#f4f4f5;--line:#e4e4e7;--txt:#18181b;--dim:#71717a;--amber:#2563eb;--teal:#059669;--coral:#dc2626;
+  background:var(--ink);color:var(--txt);font-family:'IBM Plex Sans',system-ui,sans-serif;min-height:100%;padding:0 0 56px}
+.pdl *{box-sizing:border-box}
+.pdl h1,.pdl h2,.pdl h3{font-family:'IBM Plex Serif',Georgia,serif;font-weight:600;margin:0}
+.pdl .mono{font-family:'IBM Plex Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.wrap{max-width:1040px;margin:0 auto;padding:0 20px}
+.top{border-bottom:1px solid var(--line);padding:22px 0 0}
+.brand{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.brand h1{font-size:23px;letter-spacing:-.01em}
+.brand span{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+.tabs{display:flex;gap:2px;margin-top:20px;flex-wrap:wrap}
+.tab{background:none;border:0;border-bottom:2px solid transparent;color:var(--dim);padding:9px 14px;font:inherit;font-size:14px;cursor:pointer;border-radius:4px 4px 0 0}
+.tab:hover{color:var(--txt);background:var(--panel)}
+.tab[data-on="1"]{color:var(--amber);border-bottom-color:var(--amber)}
+.tab:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+
+.hero{padding:30px 0 8px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:28px;align-items:end}
+.big{font-size:60px;line-height:.95;letter-spacing:-.03em;color:var(--amber)}
+.big small{font-size:14px;color:var(--dim);letter-spacing:0;display:block;margin-top:8px;font-family:'IBM Plex Sans',sans-serif}
+.metas{display:flex;gap:26px;flex-wrap:wrap}
+.meta-i{text-align:right}
+.meta-i b{display:block;font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:500}
+.meta-i span{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}
+
+.fita{margin-top:26px;border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:18px 18px 12px;position:relative}
+.fita-cab{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.fita-cab h2{font-size:15px}
+.goal{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim)}
+.goal input{width:74px;background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:6px;padding:5px 8px;font-family:'IBM Plex Mono',monospace;font-size:13px}
+.plot{display:flex;align-items:flex-end;gap:6px;height:170px;position:relative;overflow-x:auto;padding-bottom:2px}
+.linha-meta{position:absolute;left:0;right:0;border-top:1px dashed var(--amber);opacity:.55;pointer-events:none}
+.linha-meta i{position:absolute;right:0;top:-16px;font-size:10px;font-style:normal;color:var(--amber);background:var(--panel);padding:0 4px}
+.col{flex:1 0 26px;min-width:26px;display:flex;flex-direction:column;justify-content:flex-end;height:100%;background:none;border:0;padding:0;cursor:pointer}
+.col:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.barra{border-radius:3px 3px 0 0;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;transition:opacity .15s}
+.col:hover .barra{opacity:.78}
+.erro{background:#e4e4e7}
+.acerto{background:var(--teal)}
+.col[data-sel="1"] .acerto{background:var(--amber)}
+.rot{font-size:10px;color:var(--dim);text-align:center;margin-top:7px;font-family:'IBM Plex Mono',monospace}
+.detalhe{border-top:1px solid var(--line);margin-top:14px;padding-top:12px;font-size:13px;color:var(--dim);display:flex;gap:20px;flex-wrap:wrap}
+.detalhe b{color:var(--txt);font-family:'IBM Plex Mono',monospace;font-weight:500}
+
+.secao-titulo{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:32px 0 12px;flex-wrap:wrap}
+.secao-titulo h2{font-size:16px}
+.secao-titulo span{font-size:11px;color:var(--dim);letter-spacing:.06em}
+
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:16px;margin-top:20px}
+.card{border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:18px}
+.card h3{font-size:14px;margin-bottom:14px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);font-weight:500;padding:0 8px 8px 0;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:9px 8px 9px 0;border-bottom:1px solid #ececef;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td.n,th.n{text-align:right;font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums}
+.tabela-scroll{overflow-x:auto}
+
+.item{border:1px solid var(--line);border-radius:9px;background:var(--panel);padding:14px 16px;margin-bottom:10px}
+.item-cab{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap}
+.area{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.assunto{font-size:15px;font-family:'IBM Plex Serif',serif;font-weight:500;margin-top:3px}
+.prazo{font-family:'IBM Plex Mono',monospace;font-size:13px;text-align:right;white-space:nowrap}
+.atrasado{color:var(--coral)}
+.hoje{color:var(--amber)}
+.futuro{color:var(--dim)}
+.trilha{display:flex;gap:3px;margin-top:11px;flex-wrap:wrap}
+.pip{width:26px;height:5px;border-radius:2px;background:var(--line)}
+.pip[data-p="alto"]{background:var(--teal)}
+.pip[data-p="medio"]{background:var(--amber)}
+.pip[data-p="baixo"]{background:var(--coral)}
+
+.btn{background:var(--amber);color:#ffffff;border:0;border-radius:7px;padding:9px 15px;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.btn:hover{filter:brightness(1.08)}
+.btn.ghost{background:none;color:var(--dim);border:1px solid var(--line)}
+.btn.ghost:hover{color:var(--txt);border-color:var(--dim);filter:none}
+.btn:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn.icon{padding:7px 11px;font-size:15px;line-height:1}
+
+.form{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;align-items:end}
+label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:6px}
+input,select{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:7px;padding:9px 10px;font:inherit;font-size:14px}
+input:focus,select:focus{outline:2px solid var(--amber);outline-offset:-1px;border-color:transparent}
+.dica{font-size:12px;color:var(--dim);margin-top:10px}
+.vazio{text-align:center;padding:40px 20px;color:var(--dim);font-size:14px;border:1px dashed var(--line);border-radius:10px}
+.pill{display:inline-block;font-size:11px;font-family:'IBM Plex Mono',monospace;padding:3px 8px;border-radius:20px;background:var(--panel2);color:var(--dim);margin-left:8px}
+.linha-btns{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+
+.cal-cab{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px}
+.cal-cab h3{font-size:16px;text-transform:capitalize}
+.cal-nav{display:flex;gap:8px}
+.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
+.cal-dow{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);text-align:center;padding-bottom:2px}
+.cal-dia{min-height:82px;border:1px solid var(--line);border-radius:8px;padding:6px;background:var(--panel2);display:flex;flex-direction:column;gap:3px;overflow:hidden}
+.cal-dia[data-fora="1"]{opacity:.32}
+.cal-dia[data-hoje="1"]{border-color:var(--amber);border-width:2px}
+.cal-dia[data-arraste="1"]{border-color:var(--amber);border-width:2px;border-style:dashed;background:var(--panel)}
+.cal-num{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dim)}
+.cal-tag{font-size:10px;padding:2px 5px;border-radius:4px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:grab}
+.cal-tag:active{cursor:grabbing}
+.cal-tag.ajustada{box-shadow:inset 0 0 0 1px currentColor}
+.cal-tag.atrasado{outline:1.5px solid var(--coral);outline-offset:-1.5px}
+.cal-tag.hoje{outline:1.5px solid var(--amber);outline-offset:-1.5px}
+.cal-legenda-areas{display:flex;gap:14px;margin-top:8px;flex-wrap:wrap;font-size:11px;color:var(--dim)}
+.cal-legenda-areas i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+
+.cal-mais{font-size:9px;color:var(--dim)}
+.cal-legenda{display:flex;gap:16px;margin-top:14px;flex-wrap:wrap;font-size:11px;color:var(--dim)}
+.cal-legenda i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+
+@media(max-width:640px){
+  .hero{grid-template-columns:1fr;gap:18px;align-items:start}
+  .metas{justify-content:flex-start}
+  .meta-i{text-align:left}
+  .big{font-size:46px}
+  .cal-dia{min-height:56px}
+  .cal-tag{font-size:8px}
+  .cal-cab h3{font-size:14px}
+}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+`;
+
+const CHAVE = "papodeliso:v1";
+
+function PapoDeLiso() {
+  const [topicos, setTopicos] = useState([]);
+  const [provas, setProvas] = useState([]);
+  const [meta, setMeta] = useState(300);
+  const [aba, setAba] = useState("principal");
+  const [carregando, setCarregando] = useState(true);
+  const [semanaSel, setSemanaSel] = useState(null);
+  const salvouRef = useRef(false);
+
+  /* carregar (localStorage — os dados ficam salvos neste navegador) */
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(CHAVE);
+      if (raw) {
+        const d = JSON.parse(raw);
+        setTopicos(d.topicos || []);
+        setProvas(d.provas || []);
+        setMeta(d.meta ?? 300);
+      }
+    } catch (e) {
+      /* primeira vez: nada salvo ainda */
+    }
+    setCarregando(false);
+    salvouRef.current = true;
+  }, []);
+
+  /* salvar */
+  useEffect(() => {
+    if (!salvouRef.current) return;
+    try {
+      localStorage.setItem(CHAVE, JSON.stringify({ topicos, provas, meta }));
+    } catch (e) {
+      console.error("falha ao salvar", e);
+    }
+  }, [topicos, provas, meta]);
+
+  const sessoes = useMemo(
+    () =>
+      topicos.flatMap((t) =>
+        t.sessoes.map((s, i) => ({
+          ...s,
+          area: t.area,
+          assunto: t.assunto,
+          ordem: i,
+          d: parseData(s.data),
+        }))
+      ),
+    [topicos]
+  );
+
+  /* agregação semanal */
+  const semanas = useMemo(() => {
+    if (!sessoes.length) return [];
+    const mapa = new Map();
+    sessoes.forEach((s) => {
+      const k = iso(inicioSemana(s.d));
+      if (!mapa.has(k))
+        mapa.set(k, { k, questoes: 0, acertos: 0, n: 0, areas: {} });
+      const w = mapa.get(k);
+      w.questoes += s.questoes;
+      w.acertos += s.acertos;
+      w.n += 1;
+      w.areas[s.area] = (w.areas[s.area] || 0) + s.questoes;
+    });
+    const chaves = [...mapa.keys()].sort();
+    const ini = parseData(chaves[0]);
+    const fim = inicioSemana(hoje());
+    const out = [];
+    for (let d = new Date(ini); d <= fim; d = somaDias(d, 7)) {
+      const k = iso(d);
+      out.push(mapa.get(k) || { k, questoes: 0, acertos: 0, n: 0, areas: {} });
+    }
+    return out.slice(-18);
+  }, [sessoes]);
+
+  /* agregação mensal */
+  const meses = useMemo(() => {
+    const mapa = new Map();
+    sessoes.forEach((s) => {
+      const k = `${s.d.getFullYear()}-${String(s.d.getMonth() + 1).padStart(2, "0")}`;
+      if (!mapa.has(k)) mapa.set(k, { k, questoes: 0, acertos: 0, n: 0 });
+      const m = mapa.get(k);
+      m.questoes += s.questoes;
+      m.acertos += s.acertos;
+      m.n += 1;
+    });
+    return [...mapa.values()].sort((a, b) => b.k.localeCompare(a.k)).slice(0, 8);
+  }, [sessoes]);
+
+  const ult4 = semanas.slice(-4).reduce((a, w) => a + w.questoes, 0);
+  const ult4ac = semanas.slice(-4).reduce((a, w) => a + w.acertos, 0);
+  const semAtiva = semanas.length ? semanas[semanas.length - 1] : null;
+  const ativos = topicos.filter((t) => t.sessoes.length < 9).length;
+  const atrasados = topicos.filter((t) => {
+    const s = situacao(t);
+    return s.fase === "ativo" && s.restam < 0;
+  }).length;
+
+  const maxBarra = Math.max(meta, ...semanas.map((w) => w.questoes), 1);
+
+  const addTopico = (area, assunto, data, questoes, acertos) =>
+    setTopicos((p) => [
+      ...p,
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        area,
+        assunto,
+        sessoes: [{ data, questoes, acertos }],
+      },
+    ]);
+
+  const addSessao = (id, data, questoes, acertos) =>
+    setTopicos((p) =>
+      p.map((t) =>
+        t.id === id
+          ? { ...t, sessoes: [...t.sessoes, { data, questoes, acertos }] }
+          : t
+      )
+    );
+
+  const removerTopico = (id) =>
+    setTopicos((p) => p.filter((t) => t.id !== id));
+
+  const moverRevisao = (id, novaDataIso) =>
+    setTopicos((p) =>
+      p.map((t) => (t.id === id ? { ...t, vencimentoManual: novaDataIso } : t))
+    );
+
+  const desfazerAjuste = (id) =>
+    setTopicos((p) =>
+      p.map((t) => (t.id === id ? { ...t, vencimentoManual: null } : t))
+    );
+
+  const addProva = (instituicao, ano, data, questoes, acertos, obs) =>
+    setProvas((p) => [
+      ...p,
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        instituicao,
+        ano,
+        data,
+        questoes,
+        acertos,
+        obs,
+      },
+    ]);
+
+  const removerProva = (id) =>
+    setProvas((p) => p.filter((x) => x.id !== id));
+
+  const exportar = () => {
+    const blob = new Blob(
+      [JSON.stringify({ topicos, provas, meta }, null, 2)],
+      { type: "application/json" }
+    );
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `papo-de-liso-backup-${iso(hoje())}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const importar = (ev) => {
+    const f = ev.target.files?.[0];
+    if (!f) return;
+    const fr = new FileReader();
+    fr.onload = () => {
+      try {
+        const d = JSON.parse(fr.result);
+        if (Array.isArray(d.topicos)) {
+          setTopicos(d.topicos);
+          setProvas(Array.isArray(d.provas) ? d.provas : []);
+          if (d.meta) setMeta(d.meta);
+        }
+      } catch (e) {
+        console.error("arquivo inválido", e);
+      }
+    };
+    fr.readAsText(f);
+    ev.target.value = "";
+  };
+
+  const semanaDetalhe =
+    semanaSel != null ? semanas.find((w) => w.k === semanaSel) : null;
+
+  return (
+    <div className="pdl">
+      <style>{CSS}</style>
+
+      <header className="top">
+        <div className="wrap">
+          <div className="brand">
+            <h1>Papo de Liso</h1>
+            <span>revisões, provas e volume de questões</span>
+          </div>
+          <nav className="tabs">
+            {[
+              ["principal", "Início"],
+              ["fila", `Fila${atrasados ? ` · ${atrasados}` : ""}`],
+              ["provas", "Provas"],
+              ["assuntos", "Assuntos"],
+            ].map(([k, r]) => (
+              <button
+                key={k}
+                className="tab"
+                data-on={aba === k ? "1" : "0"}
+                onClick={() => setAba(k)}
+              >
+                {r}
+              </button>
+            ))}
+          </nav>
+        </div>
+      </header>
+
+      <div className="wrap">
+        {carregando ? (
+          <div className="vazio" style={{ marginTop: 30 }}>
+            Carregando seus dados…
+          </div>
+        ) : aba === "principal" ? (
+          <>
+            <section className="hero">
+              <div>
+                <div className="big mono">
+                  {ult4.toLocaleString("pt-BR")}
+                  <small>questões nas últimas 4 semanas</small>
+                </div>
+              </div>
+              <div className="metas">
+                <div className="meta-i">
+                  <b>
+                    {ult4 ? Math.round((ult4ac / ult4) * 100) + "%" : "—"}
+                  </b>
+                  <span>acerto no período</span>
+                </div>
+                <div className="meta-i">
+                  <b>{semAtiva ? semAtiva.questoes : 0}</b>
+                  <span>esta semana</span>
+                </div>
+                <div className="meta-i">
+                  <b>{ativos}</b>
+                  <span>assuntos em ciclo</span>
+                </div>
+                <div className="meta-i">
+                  <b>{atrasados}</b>
+                  <span>revisões atrasadas</span>
+                </div>
+              </div>
+            </section>
+
+            <section className="fita">
+              <div className="fita-cab">
+                <h2>Volume semanal</h2>
+                <div className="goal">
+                  <label
+                    htmlFor="meta"
+                    style={{ margin: 0, textTransform: "none", letterSpacing: 0 }}
+                  >
+                    Meta semanal
+                  </label>
+                  <input
+                    id="meta"
+                    type="number"
+                    min="0"
+                    value={meta}
+                    onChange={(e) => setMeta(Number(e.target.value) || 0)}
+                  />
+                </div>
+              </div>
+
+              {semanas.length ? (
+                <>
+                  <div className="plot">
+                    {meta > 0 && (
+                      <div
+                        className="linha-meta"
+                        style={{ bottom: `${(meta / maxBarra) * 100}%` }}
+                      >
+                        <i>meta {meta}</i>
+                      </div>
+                    )}
+                    {semanas.map((w) => {
+                      const h = (w.questoes / maxBarra) * 100;
+                      const pa = w.questoes ? w.acertos / w.questoes : 0;
+                      return (
+                        <button
+                          key={w.k}
+                          className="col"
+                          data-sel={semanaSel === w.k ? "1" : "0"}
+                          onClick={() =>
+                            setSemanaSel(semanaSel === w.k ? null : w.k)
+                          }
+                          title={`${curto(parseData(w.k))} — ${w.questoes} questões`}
+                        >
+                          <div
+                            className="barra"
+                            style={{ height: `${Math.max(h, w.questoes ? 2 : 0)}%` }}
+                          >
+                            <div
+                              className="erro"
+                              style={{ flexGrow: 1 - pa, minHeight: 0 }}
+                            />
+                            <div
+                              className="acerto"
+                              style={{ flexGrow: pa, minHeight: 0 }}
+                            />
+                          </div>
+                          <div className="rot">{curto(parseData(w.k))}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="detalhe">
+                    {semanaDetalhe ? (
+                      <>
+                        <span>
+                          Semana de <b>{curto(parseData(semanaDetalhe.k))}</b>
+                        </span>
+                        <span>
+                          Questões <b>{semanaDetalhe.questoes}</b>
+                        </span>
+                        <span>
+                          Acerto{" "}
+                          <b>
+                            {semanaDetalhe.questoes
+                              ? Math.round(
+                                  (semanaDetalhe.acertos /
+                                    semanaDetalhe.questoes) *
+                                    100
+                                ) + "%"
+                              : "—"}
+                          </b>
+                        </span>
+                        <span>
+                          Sessões <b>{semanaDetalhe.n}</b>
+                        </span>
+                        {Object.entries(semanaDetalhe.areas)
+                          .sort((a, b) => b[1] - a[1])
+                          .slice(0, 3)
+                          .map(([a, q]) => (
+                            <span key={a}>
+                              {a} <b>{q}</b>
+                            </span>
+                          ))}
+                      </>
+                    ) : (
+                      <span>
+                        Barra sólida = acertos. Clique numa semana para abrir o
+                        detalhe.
+                      </span>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="vazio">
+                  Sem registros ainda. Comece em <b>Assuntos</b>.
+                </div>
+              )}
+            </section>
+
+            <div className="secao-titulo">
+              <h2>Calendário de revisões</h2>
+              <span>vencimentos por dia</span>
+            </div>
+            <Calendario
+              topicos={topicos}
+              onMover={moverRevisao}
+              onDesfazer={desfazerAjuste}
+            />
+
+            <div className="secao-titulo">
+              <h2>Volume e desempenho</h2>
+              <span>por mês e por área</span>
+            </div>
+            <div className="grid2">
+              <div className="card">
+                <h3>Por mês</h3>
+                {meses.length ? (
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Mês</th>
+                        <th className="n">Sessões</th>
+                        <th className="n">Questões</th>
+                        <th className="n">Acerto</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {meses.map((m) => {
+                        const [a, mm] = m.k.split("-");
+                        return (
+                          <tr key={m.k}>
+                            <td>
+                              {MESES[Number(mm) - 1]}/{a.slice(2)}
+                            </td>
+                            <td className="n">{m.n}</td>
+                            <td className="n">{m.questoes}</td>
+                            <td className="n">
+                              {m.questoes
+                                ? Math.round((m.acertos / m.questoes) * 100) + "%"
+                                : "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="dica">Nada registrado ainda.</p>
+                )}
+              </div>
+
+              <div className="card">
+                <h3>Por grande área</h3>
+                {sessoes.length ? (
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Área</th>
+                        <th className="n">Questões</th>
+                        <th className="n">Acerto</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(
+                        sessoes.reduce((acc, s) => {
+                          acc[s.area] = acc[s.area] || { q: 0, a: 0 };
+                          acc[s.area].q += s.questoes;
+                          acc[s.area].a += s.acertos;
+                          return acc;
+                        }, {})
+                      )
+                        .sort((x, y) => y[1].q - x[1].q)
+                        .map(([a, v]) => (
+                          <tr key={a}>
+                            <td>{a}</td>
+                            <td className="n">{v.q}</td>
+                            <td className="n">
+                              {v.q ? Math.round((v.a / v.q) * 100) + "%" : "—"}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="dica">Nada registrado ainda.</p>
+                )}
+              </div>
+            </div>
+
+            <div className="linha-btns">
+              <button className="btn ghost" onClick={exportar}>
+                Baixar backup
+              </button>
+              <label
+                className="btn ghost"
+                style={{ margin: 0, cursor: "pointer", letterSpacing: 0, textTransform: "none", fontSize: 13, fontWeight: 600 }}
+              >
+                Restaurar backup
+                <input
+                  type="file"
+                  accept="application/json"
+                  onChange={importar}
+                  style={{ display: "none" }}
+                />
+              </label>
+            </div>
+          </>
+        ) : aba === "fila" ? (
+          <Fila topicos={topicos} onRegistrar={addSessao} />
+        ) : aba === "provas" ? (
+          <Provas provas={provas} onAdd={addProva} onRemover={removerProva} />
+        ) : (
+          <Assuntos
+            topicos={topicos}
+            onAdd={addTopico}
+            onRemover={removerTopico}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ─── fila de revisões ─── */
+function Fila({ topicos, onRegistrar }) {
+  const [aberto, setAberto] = useState(null);
+
+  const lista = topicos
+    .map((t) => ({ t, s: situacao(t) }))
+    .filter((x) => x.s.fase === "ativo")
+    .sort((a, b) => a.s.vencimento - b.s.vencimento);
+
+  if (!lista.length)
+    return (
+      <div className="vazio" style={{ marginTop: 30 }}>
+        Nenhuma revisão agendada. Cadastre um assunto para o ciclo começar.
+      </div>
+    );
+
+  return (
+    <section style={{ marginTop: 26 }}>
+      {lista.map(({ t, s }) => {
+        const cls = s.restam < 0 ? "atrasado" : s.restam === 0 ? "hoje" : "futuro";
+        const rot =
+          s.restam < 0
+            ? `${Math.abs(s.restam)} d atrasada`
+            : s.restam === 0
+            ? "hoje"
+            : `em ${s.restam} d`;
+        return (
+          <article className="item" key={t.id}>
+            <div className="item-cab">
+              <div style={{ minWidth: 0 }}>
+                <div className="area">{t.area}</div>
+                <div className="assunto">{t.assunto}</div>
+              </div>
+              <div className={`prazo ${cls}`}>
+                {curto(s.vencimento)}
+                <div style={{ fontSize: 11, opacity: 0.85 }}>{rot}</div>
+              </div>
+            </div>
+
+            <Trilha topico={t} />
+
+            <div className="linha-btns">
+              <span className="pill" style={{ marginLeft: 0 }}>
+                {s.proxima} · intervalo de {s.intervalo} d
+              </span>
+              {s.ajustado && <span className="pill">reagendada manualmente</span>}
+              <button
+                className="btn"
+                onClick={() => setAberto(aberto === t.id ? null : t.id)}
+              >
+                {aberto === t.id ? "Cancelar" : "Registrar revisão"}
+              </button>
+            </div>
+
+            {aberto === t.id && (
+              <FormSessao
+                onSalvar={(d, q, a) => {
+                  onRegistrar(t.id, d, q, a);
+                  setAberto(null);
+                }}
+              />
+            )}
+          </article>
+        );
+      })}
+    </section>
+  );
+}
+
+function Trilha({ topico }) {
+  return (
+    <div className="trilha">
+      {Array.from({ length: 9 }, (_, i) => {
+        const s = topico.sessoes[i];
+        if (!s) return <span className="pip" key={i} />;
+        const p = s.questoes ? s.acertos / s.questoes : 0;
+        return (
+          <span
+            className="pip"
+            key={i}
+            data-p={p >= 0.8 ? "alto" : p >= 0.6 ? "medio" : "baixo"}
+            title={`${ORDINAIS[i]} · ${s.questoes} q · ${Math.round(p * 100)}%`}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+/* ─── calendário de revisões ─── */
+function Calendario({ topicos, onMover, onDesfazer }) {
+  const [mesRef, setMesRef] = useState(() => {
+    const h = hoje();
+    return new Date(h.getFullYear(), h.getMonth(), 1);
+  });
+  const [alvoArraste, setAlvoArraste] = useState(null);
+  const arrastandoRef = useRef(null);
+
+  const porDia = useMemo(() => {
+    const mapa = new Map();
+    topicos.forEach((t) => {
+      const s = situacao(t);
+      if (s.fase !== "ativo") return;
+      const k = iso(s.vencimento);
+      if (!mapa.has(k)) mapa.set(k, []);
+      mapa.get(k).push({ t, s });
+    });
+    return mapa;
+  }, [topicos]);
+
+  const primeiroDiaGrade = inicioSemana(mesRef);
+  const dias = Array.from({ length: 42 }, (_, i) => somaDias(primeiroDiaGrade, i));
+  const mudarMes = (delta) =>
+    setMesRef((d) => new Date(d.getFullYear(), d.getMonth() + delta, 1));
+  const irParaHoje = () => {
+    const h = hoje();
+    setMesRef(new Date(h.getFullYear(), h.getMonth(), 1));
+  };
+  const hojeIso = iso(hoje());
+
+  const soltar = (e, k) => {
+    e.preventDefault();
+    setAlvoArraste(null);
+    const id = e.dataTransfer.getData("text/plain") || arrastandoRef.current;
+    arrastandoRef.current = null;
+    if (id) onMover(id, k);
+  };
+
+  return (
+    <section style={{ marginTop: 20 }}>
+      <div className="card">
+        <div className="cal-cab">
+          <h3>
+            {MESES_LONGO[mesRef.getMonth()]} de {mesRef.getFullYear()}
+          </h3>
+          <div className="cal-nav">
+            <button className="btn ghost icon" onClick={() => mudarMes(-1)} aria-label="Mês anterior">
+              ‹
+            </button>
+            <button className="btn ghost" onClick={irParaHoje}>
+              Hoje
+            </button>
+            <button className="btn ghost icon" onClick={() => mudarMes(1)} aria-label="Próximo mês">
+              ›
+            </button>
+          </div>
+        </div>
+
+        <div className="cal-grid">
+          {DOW_CURTO.map((d) => (
+            <div className="cal-dow" key={d}>
+              {d}
+            </div>
+          ))}
+          {dias.map((d) => {
+            const k = iso(d);
+            const itens = (porDia.get(k) || []).sort((x, y) => x.t.assunto.localeCompare(y.t.assunto));
+            const foraDoMes = d.getMonth() !== mesRef.getMonth();
+            return (
+              <div
+                key={k}
+                className="cal-dia"
+                data-fora={foraDoMes ? "1" : "0"}
+                data-hoje={k === hojeIso ? "1" : "0"}
+                data-arraste={alvoArraste === k ? "1" : "0"}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (alvoArraste !== k) setAlvoArraste(k);
+                }}
+                onDragLeave={() => setAlvoArraste((cur) => (cur === k ? null : cur))}
+                onDrop={(e) => soltar(e, k)}
+              >
+                <span className="cal-num">{d.getDate()}</span>
+                {itens.slice(0, 3).map(({ t, s }) => {
+                  const cls = s.restam < 0 ? "atrasado" : s.restam === 0 ? "hoje" : "futuro";
+                  const { cor, tinta } = corDaArea(t.area);
+                  return (
+                    <span
+                      className={`cal-tag ${cls}${s.ajustado ? " ajustada" : ""}`}
+                      key={t.id}
+                      style={{ background: tinta, color: cor }}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData("text/plain", t.id);
+                        e.dataTransfer.effectAllowed = "move";
+                        arrastandoRef.current = t.id;
+                      }}
+                      onDoubleClick={() => s.ajustado && onDesfazer(t.id)}
+                      title={
+                        s.ajustado
+                          ? `${t.area} · ${t.assunto} — ${s.proxima} (movida manualmente; duplo clique para desfazer)`
+                          : `${t.area} · ${t.assunto} — ${s.proxima} · arraste para outro dia para reagendar`
+                      }
+                    >
+                      {t.assunto}
+                    </span>
+                  );
+                })}
+                {itens.length > 3 && (
+                  <span className="cal-mais">+{itens.length - 3} mais</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="cal-legenda">
+          <span><i style={{ background: "none", border: "1.5px solid var(--coral)" }} />atrasada</span>
+          <span><i style={{ background: "none", border: "1.5px solid var(--amber)" }} />vence hoje</span>
+          <span><i style={{ background: "var(--line)" }} />agendada</span>
+        </div>
+        <div className="cal-legenda-areas">
+          {AREAS.map((a) => (
+            <span key={a}>
+              <i style={{ background: corDaArea(a).cor }} />
+              {a}
+            </span>
+          ))}
+        </div>
+        <p className="dica">
+          A cor do cartão indica a grande área; o contorno indica urgência.
+          Arraste uma revisão para outro dia para reagendá-la. Dê um duplo
+          clique numa revisão reagendada para voltar à data calculada.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+/* ─── provas ─── */
+function Provas({ provas, onAdd, onRemover }) {
+  const [instituicao, setInstituicao] = useState("");
+  const [ano, setAno] = useState(String(hoje().getFullYear()));
+  const [data, setData] = useState(iso(hoje()));
+  const [q, setQ] = useState("");
+  const [a, setA] = useState("");
+  const [obs, setObs] = useState("");
+
+  const valido =
+    instituicao.trim() &&
+    Number(ano) > 1900 &&
+    Number(q) > 0 &&
+    a !== "" &&
+    Number(a) >= 0 &&
+    Number(a) <= Number(q);
+
+  const salvar = () => {
+    if (!valido) return;
+    onAdd(instituicao.trim(), Number(ano), data, Number(q), Number(a), obs.trim());
+    setInstituicao("");
+    setQ("");
+    setA("");
+    setObs("");
+  };
+
+  const instituicoes = useMemo(
+    () => [...new Set(provas.map((p) => p.instituicao))].sort((x, y) => x.localeCompare(y)),
+    [provas]
+  );
+  const anos = useMemo(
+    () => [...new Set(provas.map((p) => p.ano))].sort((x, y) => x - y),
+    [provas]
+  );
+
+  const pivot = useMemo(() => {
+    const mapa = {};
+    provas.forEach((p) => {
+      mapa[p.instituicao] = mapa[p.instituicao] || {};
+      mapa[p.instituicao][p.ano] = mapa[p.instituicao][p.ano] || { q: 0, a: 0 };
+      mapa[p.instituicao][p.ano].q += p.questoes;
+      mapa[p.instituicao][p.ano].a += p.acertos;
+    });
+    return mapa;
+  }, [provas]);
+
+  const pcts = provas.map((p) => (p.questoes ? p.acertos / p.questoes : 0));
+  const media = pcts.length ? pcts.reduce((s, v) => s + v, 0) / pcts.length : null;
+  const maior = pcts.length ? Math.max(...pcts) : null;
+  const menor = pcts.length ? Math.min(...pcts) : null;
+
+  const lista = [...provas].sort((x, y) => parseData(y.data) - parseData(x.data));
+
+  return (
+    <section style={{ marginTop: 26 }}>
+      <div className="card">
+        <h3>Nova prova</h3>
+        <div className="form">
+          <div style={{ gridColumn: "span 2" }}>
+            <label htmlFor="inst">Instituição</label>
+            <input
+              id="inst"
+              list="lista-instituicoes"
+              value={instituicao}
+              placeholder="ex.: UPE, USP-RP, SES-PE..."
+              onChange={(e) => setInstituicao(e.target.value)}
+            />
+            <datalist id="lista-instituicoes">
+              {instituicoes.map((i) => (
+                <option key={i} value={i} />
+              ))}
+            </datalist>
+          </div>
+          <div>
+            <label htmlFor="ano">Ano</label>
+            <input
+              id="ano"
+              type="number"
+              value={ano}
+              onChange={(e) => setAno(e.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="dtp">Data</label>
+            <input
+              id="dtp"
+              type="date"
+              value={data}
+              onChange={(e) => setData(e.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="qp">Questões</label>
+            <input
+              id="qp"
+              type="number"
+              min="1"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="ap">Acertos</label>
+            <input
+              id="ap"
+              type="number"
+              min="0"
+              value={a}
+              onChange={(e) => setA(e.target.value)}
+            />
+          </div>
+          <div style={{ gridColumn: "span 2" }}>
+            <label htmlFor="obsp">Observação (opcional)</label>
+            <input
+              id="obsp"
+              value={obs}
+              placeholder="ex.: 1ª fase, prova objetiva..."
+              onChange={(e) => setObs(e.target.value)}
+            />
+          </div>
+          <button className="btn" onClick={salvar} disabled={!valido}>
+            Adicionar
+          </button>
+        </div>
+      </div>
+
+      {provas.length > 0 && (
+        <div className="grid2" style={{ marginTop: 16 }}>
+          <div className="card">
+            <h3>Resumo geral</h3>
+            <div className="metas" style={{ justifyContent: "flex-start", gap: 26 }}>
+              <div className="meta-i" style={{ textAlign: "left" }}>
+                <b>{Math.round(media * 100)}%</b>
+                <span>média geral</span>
+              </div>
+              <div className="meta-i" style={{ textAlign: "left" }}>
+                <b>{Math.round(maior * 100)}%</b>
+                <span>maior nota</span>
+              </div>
+              <div className="meta-i" style={{ textAlign: "left" }}>
+                <b>{Math.round(menor * 100)}%</b>
+                <span>menor nota</span>
+              </div>
+              <div className="meta-i" style={{ textAlign: "left" }}>
+                <b>{provas.length}</b>
+                <span>provas registradas</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <h3>Por instituição</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Instituição</th>
+                  <th className="n">Provas</th>
+                  <th className="n">Média</th>
+                </tr>
+              </thead>
+              <tbody>
+                {instituicoes.map((inst) => {
+                  const desta = provas.filter((p) => p.instituicao === inst);
+                  const totQ = desta.reduce((s, p) => s + p.questoes, 0);
+                  const totA = desta.reduce((s, p) => s + p.acertos, 0);
+                  return (
+                    <tr key={inst}>
+                      <td>{inst}</td>
+                      <td className="n">{desta.length}</td>
+                      <td className="n">
+                        {totQ ? Math.round((totA / totQ) * 100) + "%" : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {anos.length > 0 && (
+        <div className="card tabela-scroll" style={{ marginTop: 16 }}>
+          <h3>Evolução por instituição × ano</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Instituição</th>
+                {anos.map((a) => (
+                  <th key={a} className="n">
+                    {a}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {instituicoes.map((inst) => (
+                <tr key={inst}>
+                  <td>{inst}</td>
+                  {anos.map((a) => {
+                    const c = pivot[inst]?.[a];
+                    return (
+                      <td key={a} className="n">
+                        {c ? Math.round((c.a / c.q) * 100) + "%" : "—"}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <h3 style={{ margin: "22px 0 12px", fontSize: 15 }}>
+        Histórico <span className="pill">{provas.length}</span>
+      </h3>
+
+      {lista.length ? (
+        lista.map((p) => {
+          const pct = p.questoes ? Math.round((p.acertos / p.questoes) * 100) : null;
+          return (
+            <article className="item" key={p.id}>
+              <div className="item-cab">
+                <div>
+                  <div className="area">
+                    {p.instituicao} · {p.ano}
+                  </div>
+                  <div className="assunto">
+                    {curto(parseData(p.data))}
+                    {p.obs ? ` — ${p.obs}` : ""}
+                  </div>
+                </div>
+                <div className="prazo">
+                  {p.acertos}/{p.questoes}
+                  <div style={{ fontSize: 11, color: "var(--dim)" }}>{pct}%</div>
+                </div>
+              </div>
+              <div className="linha-btns">
+                <button className="btn ghost" onClick={() => onRemover(p.id)}>
+                  Remover
+                </button>
+              </div>
+            </article>
+          );
+        })
+      ) : (
+        <div className="vazio">Nenhuma prova registrada ainda.</div>
+      )}
+    </section>
+  );
+}
+
+/* ─── cadastro de assuntos ─── */
+function Assuntos({ topicos, onAdd, onRemover }) {
+  const [area, setArea] = useState(AREAS[0]);
+  const [assunto, setAssunto] = useState("");
+  const [data, setData] = useState(iso(hoje()));
+  const [q, setQ] = useState("");
+  const [a, setA] = useState("");
+
+  const valido =
+    assunto.trim() &&
+    Number(q) > 0 &&
+    a !== "" &&
+    Number(a) >= 0 &&
+    Number(a) <= Number(q);
+
+  const salvar = () => {
+    if (!valido) return;
+    onAdd(area, assunto.trim(), data, Number(q), Number(a));
+    setAssunto("");
+    setQ("");
+    setA("");
+  };
+
+  return (
+    <section style={{ marginTop: 26 }}>
+      <div className="card">
+        <h3>Novo contato inicial</h3>
+        <div className="form">
+          <div>
+            <label htmlFor="ar">Grande área</label>
+            <select id="ar" value={area} onChange={(e) => setArea(e.target.value)}>
+              {AREAS.map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </select>
+          </div>
+          <div style={{ gridColumn: "span 2" }}>
+            <label htmlFor="as">Assunto estudado</label>
+            <input
+              id="as"
+              value={assunto}
+              placeholder="ex.: Insuficiência cardíaca"
+              onChange={(e) => setAssunto(e.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="dt">Data</label>
+            <input
+              id="dt"
+              type="date"
+              value={data}
+              onChange={(e) => setData(e.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="qq">Questões</label>
+            <input
+              id="qq"
+              type="number"
+              min="1"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="aa">Acertos</label>
+            <input
+              id="aa"
+              type="number"
+              min="0"
+              value={a}
+              onChange={(e) => setA(e.target.value)}
+            />
+          </div>
+          <button className="btn" onClick={salvar} disabled={!valido}>
+            Adicionar
+          </button>
+        </div>
+        <p className="dica">
+          A data da 1ª revisão sai do seu percentual: abaixo de 60% volta em 3
+          dias; 60–65%, 10; 66–70%, 13; 71–80%, 20; 81% ou mais, 23.
+        </p>
+      </div>
+
+      <h3 style={{ margin: "26px 0 12px", fontSize: 15 }}>
+        Assuntos cadastrados <span className="pill">{topicos.length}</span>
+      </h3>
+
+      {topicos.length ? (
+        topicos.map((t) => {
+          const tot = t.sessoes.reduce(
+            (acc, s) => ({
+              q: acc.q + s.questoes,
+              a: acc.a + s.acertos,
+            }),
+            { q: 0, a: 0 }
+          );
+          const s = situacao(t);
+          return (
+            <article className="item" key={t.id}>
+              <div className="item-cab">
+                <div>
+                  <div className="area">{t.area}</div>
+                  <div className="assunto">{t.assunto}</div>
+                </div>
+                <div className="prazo">
+                  {tot.q} q ·{" "}
+                  {tot.q ? Math.round((tot.a / tot.q) * 100) + "%" : "—"}
+                  <div style={{ fontSize: 11, color: "var(--dim)" }}>
+                    {s.fase === "concluido"
+                      ? "ciclo concluído"
+                      : `${t.sessoes.length - 1}/8 revisões`}
+                  </div>
+                </div>
+              </div>
+              <Trilha topico={t} />
+              <div className="linha-btns">
+                <button className="btn ghost" onClick={() => onRemover(t.id)}>
+                  Remover
+                </button>
+              </div>
+            </article>
+          );
+        })
+      ) : (
+        <div className="vazio">
+          Nenhum assunto ainda. Cadastre o primeiro acima.
+        </div>
+      )}
+    </section>
+  );
+}
+
+function FormSessao({ onSalvar }) {
+  const [data, setData] = useState(iso(hoje()));
+  const [q, setQ] = useState("");
+  const [a, setA] = useState("");
+  const valido =
+    Number(q) > 0 && a !== "" && Number(a) >= 0 && Number(a) <= Number(q);
+
+  return (
+    <div className="form" style={{ marginTop: 14 }}>
+      <div>
+        <label>Data realizada</label>
+        <input
+          type="date"
+          value={data}
+          onChange={(e) => setData(e.target.value)}
+        />
+      </div>
+      <div>
+        <label>Questões</label>
+        <input
+          type="number"
+          min="1"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+      </div>
+      <div>
+        <label>Acertos</label>
+        <input
+          type="number"
+          min="0"
+          value={a}
+          onChange={(e) => setA(e.target.value)}
+        />
+      </div>
+      <button
+        className="btn"
+        disabled={!valido}
+        onClick={() => onSalvar(data, Number(q), Number(a))}
+      >
+        Salvar
+      </button>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<PapoDeLiso />);
+</script>
+</body>
+</html>
